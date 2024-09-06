@@ -1,20 +1,18 @@
 import functools
 import json
 import os
-from typing import Any
+from typing import Any, Type
 import dotenv
 import rich
 
 dotenv.load_dotenv()
 
 from openai import OpenAI
-from dataclasses import dataclass
-
-import slack_tool
-import build_db
-
+from dataclasses import dataclass, field
 from llama_index.core.storage.index_store.types import DEFAULT_PERSIST_DIR
-from llama_index.core.schema import BaseNode
+
+import tools
+import build_db
 
 
 DEFAULT_SYSTEM_MSG = (
@@ -43,59 +41,58 @@ def apply_message_template(sys_msg: str, usr_msg: str) -> Any:
 class QA_Agent:
 
     data_dir: str = "./docs"
-    embedding_model: str = "text-embedding-3-small"
+    embedding_model: str = "text-embedding-3-large"
     model: str = "gpt-4o-mini"
     node_chunk_size = 256
     node_chunk_overlap = 20
     retrieve_top_k: int = 15
     system_message: str = DEFAULT_SYSTEM_MSG
     prompt_template: str = DEFAULT_PROMPT_TEMPLATE
+    LLM_tools: list[Type[tools.Tool]] = field(default_factory=lambda: [tools.SlackTool])
+    persist_dir: str = DEFAULT_PERSIST_DIR
 
     def __post_init__(self):
 
-        slack_app, slack_channel_id = slack_tool.init_slack_app()
-        self.post_message_to_slack = functools.partial(
-            slack_tool.send_slack_message,
-            slack_app=slack_app,
-            channel_id=slack_channel_id,
-        )
-        self.tools: Any = [slack_tool.SLACK_TOOL_SCHEMA]
+        self.tools = []
+        self.tool_funcs = {}
+        for tool_cls in self.LLM_tools:
+            tool = tool_cls()
+            tool.initialize()
+            self.tool_funcs[tool.name] = tool
+            self.tools.append(tool.schema)
 
         self.OAI_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-        self.nodes = self.load_embeddings()
 
-    def load_embeddings(self) -> list[BaseNode]:
+        if os.path.exists(self.persist_dir):
 
-        if os.path.exists(DEFAULT_PERSIST_DIR):
-            print(f"Loading embedding from {DEFAULT_PERSIST_DIR}")
-            nodes = build_db.load_existing_embeddings()
+            print(f"Loading embedding from {self.persist_dir}")
+            self.vector_db = build_db.VectorStore.from_existing_embeddings(
+                OAI_client=self.OAI_client,
+                embedding_model=self.embedding_model,
+            )
 
         else:
-            print(f"Loading Documents ...")
-            nodes = build_db.load_data(
-                self.data_dir,
-                self.node_chunk_size,
-                self.node_chunk_overlap,
+            docstore = build_db.DocStore(
+                data_dir=self.data_dir,
+                chunk_size=self.node_chunk_size,
+                chunk_overlap=self.node_chunk_overlap,
+            )
+            docstore.load_data()
+
+            self.vector_db = build_db.VectorStore(
+                nodes=docstore.nodes,
+                OAI_client=self.OAI_client,
+                embedding_model=self.embedding_model,
             )
 
             print(f"Creating and storing embeddings ...")
-            nodes, _ = build_db.create_embeddings(
-                nodes=nodes,
-                OAI_client=self.OAI_client,
-                model=self.embedding_model,
-                batch_n_texts=8,
-            )
-
-        return nodes
+            self.vector_db.create_embeddings()
 
     def query(self, input_text: str):
 
-        retrieved_nodes, _ = build_db.query(
+        retrieved_nodes, _ = self.vector_db.query(
             text=input_text,
-            nodes=self.nodes,
             top_k=self.retrieve_top_k,
-            OAI_client=self.OAI_client,
-            model=self.embedding_model,
         )
 
         retrieved_articles = apply_article_template(
@@ -124,7 +121,7 @@ class QA_Agent:
             kwargs = json.loads(kwargs)
             content = kwargs["message"]
 
-            func = getattr(self, fn_name, None)
+            func = self.tool_funcs.get(fn_name)
 
             if func is not None:
                 rich.print(f"Calling {func} with kwargs: {kwargs}")
