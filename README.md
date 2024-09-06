@@ -17,9 +17,6 @@ The agent can extract answers from the context of a large pdf document, and opti
 1. Use Faster Datastores, eg, Pinecone
 2. Store data in cloud buckets instead of locally
 3. Modularity
-   - DocStore Class with loading data modules.
-   - VectorStore Class with embedding vector creation and query modules.
-   - Tool abstract class with SlackTool Class containing init and post_message functions.
    - PromptTemplate classes
 4. Used too many list comprehensions, should replace with parallel_map.
 5. Proper Typing, using Enums instead of strings.
