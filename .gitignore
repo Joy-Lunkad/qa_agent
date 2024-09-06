@@ -1,0 +1,6 @@
+
+.env
+*.pyc
+.vscode/settings.json
+storage/docstore.json
+docs/handbook.pdf

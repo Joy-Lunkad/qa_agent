@@ -1,0 +1,8 @@
+python-dotenv
+slack_bolt
+request
+llama-index
+rich
+openai
+etils[etree]
+tqdm
